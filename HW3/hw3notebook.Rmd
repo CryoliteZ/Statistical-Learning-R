@@ -1,0 +1,306 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# 統計學習初論（106-2）作業三 第二題
+# (1)
+Provide the summary statistics of msong_train.
+
+```{r}
+load(file="data/msong_slhw.rdata")
+#defin the summary statistic function
+sumds = function(ds) {
+  nvariable = ncol(ds)
+  varnames = colnames(ds)
+  for(i in 1:nvariable) {
+    tmp1 = ds[,i]
+    #remove NA
+    tmp1 = tmp1[!is.na(tmp1)]
+    n = length(tmp1)
+    mean = mean(tmp1)
+    median = median(tmp1)
+    sd = sd(tmp1)
+    q13 = quantile(tmp1, c(0.25, 0.75))
+    min1 = min(tmp1)
+    max1 = max(tmp1)
+    arow = c(n, mean, median, sd, q13, min1, max1)
+    if(i==1) {
+      out1 = arow
+    } else {
+      out1 = rbind(out1, arow)
+    }
+  }
+  rownames(out1) = varnames
+  colnames(out1) = c("n", "mean", "median", "sd", "Q1", "Q3", "Min", "Max")
+  return(out1)
+}
+sumds(msong_train)
+```
+
+Provide the summary statistics of msong_test.
+```{R}
+sumds(msong_test)
+```
+
+
+# (2)
+#### Data preprocess
+Shift the outcome variable (year) to have mean zero by subtracting mean of year in the new training dataset. For the remaining feature values, standardize their
+values to have a mean zero and unit variance. Use the mean year in training data to shift outcome variables in msong_test. Use the mean and variance of features in
+the new training dataset to standardize corresponding feature values in msong_test.
+
+```{R}
+preprocess_data <- function(msong_train, n){
+    x_train = msong_train[1:n,2:ncol(msong_train)]
+    y_train = msong_train$year[1:n]
+
+
+    x_test = msong_test[,2:ncol(msong_test)]
+    y_test = msong_test$year
+
+    org_year_mean =  mean(y_train)
+    # shift to mean
+    y_train = y_train - mean(y_train)
+
+    # x_train <- scale(x_train) fast way to standarize
+    # standarize x_train
+    x_train_mean = t(apply(x_train, 2, function(x) mean(x, na.rm=TRUE)))                  
+    x_train_sd = apply(x_train, 2, function(x) sd(x, na.rm=TRUE))
+    x_train = sweep(x_train, 2, x_train_mean)
+    x_train = sweep(x_train, MARGIN=2, x_train_sd,`/`)
+
+
+    #  standarize x_test
+    x_test = sweep(x_test, 2, x_train_mean)
+    x_test = sweep(x_test, MARGIN=2, x_train_sd,`/`)                   
+    y_test = y_test - org_year_mean
+    return(list(x_train = x_train, y_train = y_train, x_test = x_test,y_test = y_test ))
+    
+}
+data = preprocess_data(msong_train, 5000)
+x_train = data$x_train
+y_train = data$y_train
+x_test = data$x_test
+y_test = data$y_test
+
+```
+
+#### Training process
+Train ridge regression, use gradient descend to minimize the loss function.
+
+```{R}
+# RMSE 
+RMSE <- function(x_data, y_data, w){
+    RMSE = 0
+    SE = 0
+    x_data = as.matrix(x_data)
+    y_data = as.matrix(y_data)
+    for(t in 1:nrow(y_data)){
+       SE =  SE + (y_data[t] - (w %*%  x_data[t,])) **2
+    }
+    RMSE = sqrt(SE / nrow(x_data))
+    return(RMSE)
+}
+
+# training function
+train <- function(x_train, y_train, lambda = 1, lr = 0.00001, epochs = 300){
+    nfeat = ncol(x_train)
+    w = rep(0, nfeat)
+    lambda = 10 ** lambda
+    x_train = as.matrix(x_train)
+    # gradient descend
+    for(it in 1:epochs){
+        w_grad = rep(0, nfeat)
+        for(n in 1:nrow(x_train)){
+           w_grad =  w_grad - drop( y_train[n]-  w %*% (x_train[n,])) * x_train[n,] + lambda * w
+        }
+        w = w - lr * w_grad
+    }
+
+    result = list(train_RMSE = RMSE(x_train, y_train, w), test_RMSE = RMSE(x_test, y_test, w) )
+    return(result)
+    
+}
+
+df <- data.frame(M=integer(),
+                 Training=double(), 
+                 Testing=double())
+                 
+lambdas  = c(-5:2)
+for (i in 1:length(lambdas)){
+    result =  train(x_train, y_train, lambda = lambdas[i])
+    df <-rbind(df, data.frame(M = lambdas[i], Training= result$train_RMSE, Testing=result$test_RMSE))
+}
+df
+
+```
+
+Learning rate = 0.00001
+
+Iteration 次數 = 300
+
+嘗試的$\lambda$值 從 $10^{-5}$、 $10^{-4}$ ... $10^{1}$ 、$10^{2}$，得到training, testing RMSE的結果如上表
+
+可以看出RMSE皆先逐漸變小後再逐漸變大（training $\lambda = 10^{-4}$ 最佳，testing $\lambda = 10^{-2}$ 最佳）
+
+可以看出適當的regularization，也就是合適的$\lambda$對於訓練是有幫助的
+
+而當$\lambda$太大時（$\lambda >= 10^{2}$），就train不起來結果發散了
+
+以下為作圖結果，x軸為以10為底的對數結果，y軸為RMSE
+
+```{R}
+plot (x = df$M, y = df$Training, type='o', col='blue', xlab="M", ylab="RMSE")
+lines(x = df$M,y = df$Test,type='o' ,col="red")
+
+legend("topleft", 
+  legend = c("Training", "Test"), 
+  col = c("blue","red"), 
+  pch = c(1,1), 
+  bty = "n", 
+  pt.cex = 2, 
+  cex = 1.2, 
+  text.col = "black", 
+  horiz = F , 
+  inset = c(0.1, 0.1))
+```
+
+圖形約為U型，RMSE先變小再變大
+
+
+# 3
+
+Take first 500 rows to generate new training dataset
+
+```{R}
+data = preprocess_data(msong_train, 500)
+x_train = data$x_train
+y_train = data$y_train
+x_test = data$x_test
+y_test = data$y_test
+                   
+df <- data.frame(M=integer(),
+                 Training=double(), 
+                 Testing=double())
+                 
+
+lambdas  = c(-5:2)
+for (i in 1:length(lambdas)){
+    result =  train(x_train, y_train,lambda = lambdas[i] )
+    df <-rbind(df, data.frame(M = lambdas[i], Training= result$train_RMSE, Testing=result$test_RMSE))
+}
+df
+plot (x = df$M, y = df$Training, type='o', col='blue', xlab="M", ylab="RMSE")
+lines(x = df$M,y = df$Test,type='o' ,col="red")
+legend("topleft", legend = c("Training", "Test"),   col = c("blue","red"),   pch = c(1,1),   bty = "n", pt.cex = 2,   cex = 1.2,   text.col = "black",   horiz = F ,   inset = c(0.1, 0.1))
+```
+
+
+Take first 1000 rows to generate new training dataset
+
+```{R}
+data = preprocess_data(msong_train, 1000)
+x_train = data$x_train
+y_train = data$y_train
+x_test = data$x_test
+y_test = data$y_test
+                   
+df <- data.frame(M=integer(),
+                 Training=double(), 
+                 Testing=double())
+                 
+
+lambdas  = c(-5:2)
+for (i in 1:length(lambdas)){
+    result =  train(x_train, y_train,lambda = lambdas[i] )
+    df <-rbind(df, data.frame(M = lambdas[i], Training= result$train_RMSE, Testing=result$test_RMSE))
+}
+df
+plot (x = df$M, y = df$Training, type='o', col='blue', xlab="M", ylab="RMSE")
+lines(x = df$M,y = df$Test,type='o' ,col="red")
+legend("topleft", legend = c("Training", "Test"),   col = c("blue","red"),   pch = c(1,1),   bty = "n", pt.cex = 2,   cex = 1.2,   text.col = "black",   horiz = F ,   inset = c(0.1, 0.1))
+```
+
+取500筆跟取1000筆資料的圖形皆相當類似，testing的RMSE皆先變小再提昇
+
+> Testing RMSE
+>
+> 500筆最佳：10.12186, 1000筆最佳 9.948582
+
+可以看出較大的sample size的performance較好，1000筆最佳的RMSE跟平均來看都比500筆來的低
+
+若再與第(2)題相比，又可以看出第二題取5000筆的performance又更好
+
+推測在做training時，dataset越大更容易有好的結果，也比較能夠避免overfitting的情況（有多樣化或是極端的測資） 
+
+# 4
+Shift year to have a mean zero in the new training and testing datasets as in (2). Do not standardize the feature values in this new setting.
+
+此題對於feature不做標準化，結果如下(為了讓訓練順利有做parameter tuning)
+
+
+```{R}
+x_train = msong_train[1:1000,2:ncol(msong_train)]
+y_train = msong_train$year[1:1000]
+x_test = msong_test[,2:ncol(msong_test)]
+y_test = msong_test$year
+
+org_year_mean =  mean(y_train)
+y_train = y_train - org_year_mean                
+y_test = y_test - org_year_mean
+df <- data.frame(M=integer(),
+                 Training=double(), 
+                 Testing=double())
+                 
+lambdas  = c(-5:2)
+for (i in 1:length(lambdas)){
+    result =  train(x_train, y_train,lambda = lambdas[i], lr= 10 ** -10, epochs = 100 )
+    df <-rbind(df, data.frame(M = lambdas[i], Training= result$train_RMSE, Testing=result$test_RMSE))
+}
+df
+plot (x = df$M, y = df$Training, type='o', col='blue', xlab="M", ylab="RMSE",ylim=c(10.50, 10.75))
+lines(x = df$M,y = df$Test,type='o' ,col="red")
+legend("topleft", legend = c("Training", "Test"), col = c("blue","red"),   pch = c(1,1),   bty = "n", pt.cex = 2,   cex = 1.2,   text.col = "black",   horiz = F ,   inset = c(0.1, 0.1))
+
+```
+
+圖可以看出  $\lambda$ 不太影響這次的訓練結果，且performance明顯比有做feaure scaling來的差
+
+> Testing RMSE
+> 
+> 有 standardize feature 最佳：9.948582, 無 standardize feature 最佳 10.51386
+
+做feaure scaling （將feature標準化），能有效將不同的feaure都放到同一個尺度下做訓練。若沒做此步驟，可能有些feaure數量級特大，其影響力會明顯大於其他feaure（造成bias)，通常更難訓練
+
+# 5
+
+不做任何data preprocess的結果如下
+
+```{R}
+x_train = msong_train[1:1000,2:ncol(msong_train)]
+y_train = msong_train$year[1:1000]
+x_test = msong_test[,2:ncol(msong_test)]
+y_test = msong_test$year
+
+df <- data.frame(M=integer(),
+                 Training=double(), 
+                 Testing=double())
+                 
+lambdas  = c(-5:6)
+for (i in 1:length(lambdas)){
+    result =  train(x_train, y_train,lambda = lambdas[i], lr= 10 ** -10, epochs = 100 )
+    df <-rbind(df, data.frame(M = lambdas[i], Training= result$train_RMSE, Testing=result$test_RMSE))
+}
+df
+plot (x = df$M, y = df$Training, type='o', col='blue', xlab="M", ylab="RMSE", ylim=c(666, 863))
+lines(x = df$M,y = df$Test,type='o' ,col="red")
+legend("topleft", legend = c("Training", "Test"),   col = c("blue","red"),   pch = c(1,1),   bty = "n", pt.cex = 2,   cex = 1.2,   text.col = "black",   horiz = F ,   inset = c(0.1, 0.1))
+```
+
+
+結果為目前為止所作過得嘗試最中最差的，RMSE比起 (3) 和(4)高了6倍有餘，可說不在同一個數量級
+
+若年份沒有標準化，其平均約在2000附近，明顯大於其他fearture的平均。在不同的數量級下作訓練，造成了較差的結果，故我們在訓練前應該做feature sacling, 也就是shift the mean of outcome variables to zero。使的每個feature在我們訓練時，大略的能依比例影響我們要找的gradient
+
+
+
