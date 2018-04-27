@@ -39,5 +39,6 @@ lm_evmax <- function(y, xmat){
 
     }
     result = list(mN = mN, mNsd = diag(sqrt(solve(A))), alpha = alpha, beta = beta)
+    
     return(result)
 }
