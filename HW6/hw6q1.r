@@ -46,7 +46,7 @@ rf_carton <- function(dsall, folds, testfold, ypos = "pos",  chi_threshold = 0.1
     best_f1 = -1
     best_test_result = NULL
     for(mtry in grids){
-        result = randomForest(x = dstrain_new, y = dstrain_y, xtest=dstune_new,ytest= dstune_y, mtry = mtry)
+        result = randomForest(x = dstrain_new, y = dstrain_y, xtest=dstune_new,ytest= dstune_y, ntree = rfntree ,mtry = mtry)
         test_result = mytest(result$test$confusion) 
         if(test_result$f1  > best_f1){
             best_f1 = test_result$f1
@@ -54,12 +54,11 @@ rf_carton <- function(dsall, folds, testfold, ypos = "pos",  chi_threshold = 0.1
             best_test_result = test_result
         }
         f1_all = c(f1_all, test_result$f1)
-        return(result)
     }
     new_features = filter_chisq(dstrain_all, ypos, chi_threshold = chi_threshold)
     dstrain_all = dstrain_all[new_features$colpos]
     dstest = dstest[new_features$colpos]
-    final_rf_result = randomForest(x = dstrain_all, y = dstrain_all_y, xtest=dstest,ytest= dstest_y, mtry = best_mtry)
+    final_rf_result = randomForest(x = dstrain_all, y = dstrain_all_y, xtest=dstest,ytest= dstest_y, ntree = rfntree ,mtry = best_mtry)
     result = list(mgrids= grids, f1_all=f1_all, best_m=best_mtry, test= mytest(final_rf_result$test$confusion), fselect=new_features)
     return(result)
 }
