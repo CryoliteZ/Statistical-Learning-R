@@ -1,0 +1,310 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# 統計學習初論（106-2）作業六 第二題
+# (1)
+Load libraries and data
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(glmnet)
+library(randomForest)
+library(e1071)
+
+load('data/50kpred.rdata')
+df_train_all <- raw1
+df_test <- raw_test
+df_all <- rbind(df_train_all, df_test)
+```
+```{r}
+plotPorpotion <- function(df, feature){
+    
+    occupation_above = data.frame(table(df[df[,"y_income" ] == TRUE,]$occupation))
+    occupation_below = data.frame(table(df[df[,"y_income" ] == FALSE,]$occupation))
+    occupation_all = data.frame(table(df[df[,"y_income" ] == FALSE,]$occupation))
+    occupation = merge(x = occupation_above, y = occupation_below, by = "Var1")
+    occu_names = c('occupation', 'above', 'below')
+    colnames(occupation) = occu_names
+    occupation$above_proportion = occupation$above/ (occupation$above + occupation$below)
+    ggplot(occupation, aes(x=occupation, y=above_proportion, ), xlab="Gender", ylab="Counts") + 
+        geom_bar(stat="identity", fill="lightgreen", color="grey50") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+        ggtitle('Proportions of above 50k with different occupation')+ 
+          xlab("occupation") +
+          ylab("proportion") 
+}
+table(df_all$y_income)
+plotPorpotion(df_all, 'occupation')
+```
+
+首先我們透過 `table(df_all$y_income)` 觀察到，這個資料集約75%的資料income都是<50k的
+
+我們選擇 occupation 這個 key variable來作圖，觀察到最高的兩種職業為 Exec-managerial和 Prof-specialty，皆接近50%
+
+可以明顯看出管理階層和具有專業的職業，都有顯著較高的收入
+
+再來最低的幾個 Priv-house-serv , Other-service , Handlers-cleaners
+多為服務和清潔類型，也符合我們傳統上認為這幾種行業收入偏低的印象
+
+# 2
+Filter features and one-hot-encoding
+```{r}
+standarize <- function(x_train, x_test){
+    x_train_mean = t(apply(x_train, 2, function(x) mean(x, na.rm=TRUE)))                  
+    x_train_sd = apply(x_train, 2, function(x) sd(x, na.rm=TRUE))
+    x_train_new = sweep(x_train, 2, x_train_mean)
+    x_train_new = sweep(x_train_new, MARGIN=2, x_train_sd,`/`)
+    x_test_new = sweep(x_test, 2, x_train_mean)
+    x_test_new = sweep(x_test_new, MARGIN=2, x_train_sd,`/`)                   
+    return(list(x_train = x_train_new, x_test = x_test_new))
+}
+getFeatureClasses <- function(df, dum_features){
+    result = list()
+    i <- 1
+    for(feat in dum_features){
+        cl =  as.vector(data.frame(table(df[,feat]))[table(df[,feat]) > 50,1])
+        result[[feat]] = cl
+        i <- i + 1
+    }
+    return(result)
+}
+                    
+cbind.fill<-function(...){
+  nm <- list(...) 
+  nm<-lapply(nm, as.matrix)
+  n <- max(sapply(nm, nrow)) 
+  as.data.frame(do.call(cbind, lapply(nm, function (x) 
+    rbind(x, matrix(, n-nrow(x), ncol(x))))))
+}
+onehotencoding <- function(dum_features, dum_classes, df){
+    df = df[,dum_features]
+    for(feature in dum_features){
+        classes = dum_classes[feature]
+        for(c in classes){
+            dummy <- as.numeric(df[feature] == c)
+            dum_class_name = paste(feature, c, sep="_")
+            df[dum_class_name] = dummy
+        }
+    }
+    return(df[ , !(names(df) %in% dum_features)])
+}
+
+
+dum_features = c("workclass", "marital_status", "occupation","relationship", "race", "sex", "native_country")
+dum_classes = getFeatureClasses(df_all, dum_features)
+df_train_all_dummy = onehotencoding(dum_features, dum_classes, df_train_all)
+df_test_dummy = onehotencoding(dum_features, dum_classes, df_test)
+
+continuous_features = c("age", "fnlwgt", "education_num", "capital_gain", "capital_loss", "hours_per_week")
+df_train_all_cont = df_train_all[,continuous_features]
+df_test_cont = df_test[,continuous_features]
+df_train_all_cont_std = standarize(df_train_all_cont, df_test_cont)$x_train
+df_test_cont_std = standarize(df_train_all_cont, df_test_cont)$x_test
+df_train_all_x = cbind.fill(df_train_all_cont_std,df_train_all_dummy)
+df_train_all_y = df_train_all$y_income
+df_tune_x <- df_train_all_x[folds == 10,]
+df_tune_y <- df_train_all[folds == 10,]$y_income
+df_train_x <- df_train_all_x[folds!= 10, ]
+df_train_y <- df_train_all[folds != 10,]$y_income
+df_test_x = cbind.fill(df_test_cont_std,df_test_dummy)
+df_test_y = df_test$y_income
+
+```
+
+Training and tuning ridge regression model 
+```{r}
+alpha = c(1, 0.1, 0.001, 0.0001,  0)
+err_list = c()
+for(a in alpha){
+    fit <- glmnet(as.matrix(df_train_x), df_train_y, alpha = a, family="binomial")
+    x_predict_result = predict(fit, as.matrix(df_tune_x), s = 0.0001, type = "response") >= 0.5
+    err = 1 - sum((df_tune_y == x_predict_result) == TRUE) / length(x_predict_result)
+    err_list = c(err_list,err)
+}
+data.frame(alpha = alpha, error_rate = err_list)
+
+```
+
+Fine tune alpha的值，其為1 或0.1時有最好的表現
+
+有此可以推測可能在使用 alpha=1 lasso penalty 會比 alpha=0 ridge penalty 有好的結果
+
+```{r}
+regression_model <- glmnet(as.matrix(df_train_all_x), df_train_all_y, alpha = 1, family="binomial")
+x_predict_result = predict(regression_model, as.matrix(df_test_x), s = 0.0001, type = "response") >= 0.5
+err_regression_model = 1-sum((df_test_y == x_predict_result) == TRUE) / length(x_predict_result)
+err_regression_model
+```
+
+testing error rate 為 0.1934927
+
+#3
+```{r}
+randomForestTuning <- function(df_train_x, df_train_y, df_tune_x, df_tune_y,  df_train_all_x, df_train_all_y, df_test_x, df_test_y, grid_length = 20,  grid_type = "equal", rfntree = 50 ,debuglevel=0){
+    errtest <- function (test){
+        acc = sum (((test$pred >= 0.5) == df_tune_y) == TRUE) / length(df_tune_y)
+        return(1 - acc)
+    }
+    ncol = dim(df_train_x)[2]
+    m_min = 2
+    m_max = ncol
+    grids = NULL
+    if(grid_type == "loglinear"){
+        grids = unique(round(exp(seq(log(m_min), log(m_max),length=grid_length))))
+    }
+    else if(grid_type == 'equal'){
+        grids = unique(round(seq(m_min, m_max, length=grid_length )))
+    }
+    
+    best_mtry = 2
+    best_err = 1000
+    err_list = c()
+    best_rf = NULL
+    for(mtry in grids){
+        result = randomForest(x = df_train_x, y = df_train_y, xtest=df_tune_x,ytest= df_tune_y, ntree = rfntree ,mtry = mtry)
+        test_err = errtest(result$test) 
+        err_list = c(err_list, test_err)
+        print(test_err)
+        if(test_err  < best_err){
+            best_err = test_err
+            best_mtry = mtry
+            best_rf = result
+        }else{
+            break;
+        }
+    } 
+    return(list(best_mtry = best_mtry, mtrys = mtrys,err_list = err_list, test_err = test_err, best_rf = best_rf))
+}
+
+
+rf = randomForestTuning(df_train_x, df_train_y, df_tune_x, df_tune_y,  df_train_all_x, df_train_all_y, df_test_x, df_test_y)
+```
+
+以上為fine tune random forest的程式碼，由於執行時間相當的長，以下只呈現最後結果，使用 ntree = 100 ,mtry = 11
+```{r}
+rf = randomForest(x = df_train_x, y = df_train_y, xtest=df_test_x, ntree = 100 ,mtry = 11,  keep.forest=TRUE)
+errtest <- function (test){
+    acc = sum (((test$pred >= 0.5) == df_test_y) == TRUE) / length(df_test_y)
+    return(1 - acc)
+}
+```
+
+```{r}
+predict_rf = predict(rf, newdata=df_test_x)
+error_rf = 1 - sum (((predict_rf >= 0.5) == df_test_y) == TRUE) / length(df_test_y)
+error_rf
+```
+
+testing error rate 為 0.1718459，比ridge regression model要好一些
+
+#4
+```{r}
+costs = c(20, 10, 1)
+err_list = c()
+best_svm_model = NULL
+best_err = 1000
+for(c in costs){
+  svm_model = svm(as.matrix(df_train_x), as.matrix(df_train_y), type = "C", cost = c, probability = TRUE)
+  predict = predict(svm_model, newdata = as.matrix(df_tune_x))
+  error_rate = 1 - sum((df_tune_y == predict) == TRUE) / length(df_tune_y)
+  if(error_rate < best_err){
+    best_err = error_rate
+    best_svm_model = svm_model
+  }
+  print(error_rate)
+  err_list = c(err_list, error_rate)
+}
+data.frame(costs = costs, error_rate = err_list)
+```
+
+
+
+```{r}
+predict = predict(best_svm_model, newdata = as.matrix(df_test_x), probability = TRUE)
+error_rate = 1 - sum((df_test_y == predict) == TRUE) / length(df_test_y)
+error_rate
+```
+
+對cost fine tune的結果得到的error rate為 0.1891766，為三者中第二好的結果
+
+#5
+```{r}
+# Get predict result
+predict_regression = predict(regression_model, as.matrix(df_test_x), s = 0.0001, type = "response")
+predict_rf = predict(rf, newdata=df_test_x)
+predict_svm = attr(predict(best_svm_model, newdata = as.matrix(df_test_x), probability = TRUE), "prob")[,1]
+
+```
+
+以下將對不同的stacking models 做測試
+
+### Simple average of output probabilities
+
+```{r}
+# Simple average of output probabilities
+predict_average = (predict_regression + predict_rf + predict_svm) / 3
+error_stack_avg = 1 - sum (((predict_average >= 0.5) == df_test_y) == TRUE) / length(df_test_y)
+error_stack_avg
+```
+
+### Majority votes
+
+```{r}
+# Majority votes
+vote_regression = predict_regression >= 0.5
+vote_rf = predict_rf >= 0.5
+vote_svm = predict_svm >= 0.5
+vote_df = data.frame(vote_regression, vote_rf, vote_svm)
+vote_result = c()
+for(i in 1:nrow(vote_df)){
+  count = 0
+  for(j in 1:3){
+    if(vote_df[i,j] == TRUE){
+      count = count + 1
+    }
+  }
+  if(count >= 2){
+    vote_result= c(vote_result, TRUE)
+  }
+  else{
+     vote_result= c(vote_result, FALSE)
+  }
+}
+
+error_stack_vote = 1 - sum ((vote_result== df_test_y) == TRUE) / length(df_test_y)
+error_stack_vote
+```
+
+### Ridge regression
+
+```{r}
+# Ridge regression
+predict_regression_t = predict(regression_model, as.matrix(df_train_all_x), s = 0.0001, type = "response")
+predict_rf_t = predict(rf, newdata=df_train_all_x)
+predict_svm_t = attr(predict(best_svm_model, newdata = as.matrix(df_train_all_x), probability = TRUE), "prob")[,1]
+
+stack_x_train = data.frame(predict_regression_t, predict_rf_t, predict_svm_t)
+stack_regression_model <- glmnet(as.matrix(stack_x_train), df_train_all_y, alpha = 1, family="binomial")
+
+stack_x_test = data.frame(predict_regression, predict_rf, predict_svm)
+x_predict_result = predict(stack_regression_model, as.matrix(stack_x_test), s = 0.0001, type = "response") >= 0.5
+error_stack_regression = 1-sum((df_test_y == x_predict_result) == TRUE) / length(x_predict_result)
+error_stack_regression
+```
+
+
+### Comparison
+```{r}
+list(ridge_regression = err_regression_model, randomforest = error_rf, svm =  error_rate, stack_avg =error_stack_avg, stack_vote = error_stack_vote, stack_regression = error_stack_regression)
+```
+Stacking models中，表現最優秀的為major voting
+
+可以有效的避免極端值得狀況，（例如兩個model output為0.3,0.3,一個model output為1，若使用average反而會變成預測TRUE)，並採用最多數的結果
+
+比較stacking models和前面的結果，可以看出他做出來的error rate都介於最好的randomforest和最差的ridge_regression之間，且只輸給randomforest
+
+我們可以推得stack多個model具有調和不同model，捨除極端值的效果，performance通常皆能進步
+
